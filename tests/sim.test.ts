@@ -1,7 +1,89 @@
 import { describe, it, expect } from 'vitest'
+import { Sim, CLOCK_HZ } from '../src/core/sim'
+import { lutBitPosition } from '../src/core/layout'
 
-describe('Simulation', () => {
-  it('should have placeholder tests', () => {
-    expect(true).toBe(true)
+describe('sim', () => {
+  it('runs the counter at the clock rate', () => {
+    const sim = new Sim(1)
+    const events = sim.tick(1)
+    expect(events.clockEdges).toBe(CLOCK_HZ)
+    expect(sim.faulty.getState()).toBe(CLOCK_HZ % 16)
+    expect(sim.outputsMatch).toBe(true)
+  })
+
+  it('timeScale speeds everything up', () => {
+    const sim = new Sim(1)
+    sim.timeScale = 4
+    expect(sim.tick(1).clockEdges).toBe(4 * CLOCK_HZ)
+  })
+
+  it('is deterministic for a given seed and dt sequence', () => {
+    const run = () => {
+      const sim = new Sim(99)
+      sim.radiation.rate = 8
+      sim.scrubber.enabled = true
+      for (let i = 0; i < 600; i++) sim.tick(1 / 60)
+      return [sim.faulty.getState(), sim.memory.flippedCount(), sim.time]
+    }
+    expect(run()).toEqual(run())
+  })
+
+  it('with scrubbing on and moderate radiation, memory returns to clean', () => {
+    const sim = new Sim(2024)
+    sim.radiation.rate = 5
+    sim.scrubber.enabled = true
+    sim.scrubber.speed = 64
+    let totalFlips = 0
+    for (let i = 0; i < 60 * 30; i++) totalFlips += sim.tick(1 / 60).flips.length
+    expect(totalFlips).toBeGreaterThan(50)
+
+    sim.radiation.rate = 0
+    for (let i = 0; i < 60 * 2; i++) sim.tick(1 / 60)
+    expect(sim.memory.flippedCount()).toBe(0)
+  })
+
+  it('without scrubbing, flips accumulate', () => {
+    const sim = new Sim(2024)
+    sim.radiation.rate = 5
+    for (let i = 0; i < 60 * 10; i++) sim.tick(1 / 60)
+    expect(sim.memory.flippedCount()).toBeGreaterThan(20)
+  })
+
+  it('detects state divergence that survives scrubbing, and reset fixes it', () => {
+    const sim = new Sim(1)
+    // Corrupt LUT0 for Q=3 so the counter jumps 3 -> 5 instead of 3 -> 4.
+    const { frame, bit } = lutBitPosition(0, 3)
+    sim.flipAt(frame, bit)
+    for (let i = 0; i < 4; i++) sim.tick(1 / CLOCK_HZ)
+    expect(sim.stateDiverged).toBe(true)
+
+    // Scrubber repairs configuration...
+    sim.scrubber.enabled = true
+    sim.scrubber.speed = 64
+    sim.tick(1)
+    expect(sim.memory.flippedCount()).toBe(0)
+    expect(sim.memoryPassesEcc()).toBe(true)
+    // ...but the state is still wrong.
+    expect(sim.stateDiverged).toBe(true)
+    expect(sim.outputsMatch).toBe(false)
+
+    sim.resync()
+    expect(sim.stateDiverged).toBe(false)
+    expect(sim.outputsMatch).toBe(true)
+  })
+
+  it('auto-resync kicks in once memory passes ECC', () => {
+    const sim = new Sim(1)
+    sim.autoResync = true
+    const { frame, bit } = lutBitPosition(0, 3)
+    sim.flipAt(frame, bit)
+    for (let i = 0; i < 4; i++) sim.tick(1 / CLOCK_HZ)
+    // Memory is still corrupted, so auto-resync must wait.
+    expect(sim.stateDiverged).toBe(true)
+
+    sim.scrubber.enabled = true
+    sim.scrubber.speed = 64
+    sim.tick(1)
+    expect(sim.stateDiverged).toBe(false)
   })
 })
