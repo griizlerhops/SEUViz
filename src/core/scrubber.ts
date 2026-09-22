@@ -5,19 +5,30 @@
 //   corrected     -> write the fixed frame back (single-bit error repaired)
 //   uncorrectable -> reload the frame from boot flash, which takes extra time
 //
-// Important: the scrubber only knows what ECC tells it. It never looks at the
-// memory's "which bits are flipped" bookkeeping; that exists only for the UI.
+// SECDED has a blind spot: 3 or more flips in one frame can look like a single
+// flip (so ECC "corrects" the wrong bit) or like no error at all. To catch
+// that, after every full sweep in which ECC found nothing to fix, the scrubber
+// computes a CRC-32 of all of memory and compares it with the CRC stored in
+// boot flash. A mismatch means errors are hiding from ECC, so the whole
+// configuration is reloaded from flash.
+//
+// Important: the scrubber only knows what ECC and the CRC tell it. It never
+// looks at the memory's "which bits are flipped" bookkeeping; that exists
+// only for the UI.
 
 import { ConfigMemory, FRAME_COUNT } from './configMemory'
-import { BootFlash } from './bootFlash'
+import { BootFlash, imageCrc32 } from './bootFlash'
 import { decode } from './ecc'
 
-/** Simulated seconds the scrubber stalls while reloading a frame from flash. */
+/** Simulated seconds the scrubber stalls while reloading one frame from flash. */
 export const RELOAD_DELAY = 0.25
+/** Simulated seconds the scrubber stalls while reloading all of memory. */
+export const FULL_RELOAD_DELAY = 1.0
 
 export type ScrubEvent =
   | { type: 'corrected'; frame: number; bit: number }
   | { type: 'reloaded'; frame: number }
+  | { type: 'fullReload' }
 
 export class Scrubber {
   enabled = false
@@ -27,6 +38,8 @@ export class Scrubber {
   private cursor = 0 // frame to be scanned next
   private progress = 0 // fraction (0..1) of the way through reading the cursor frame
   private pause = 0 // seconds left in a reload stall
+  private sweepScanned = 0 // frames scanned in the current sweep
+  private sweepFoundErrors = false // did ECC flag anything this sweep?
 
   constructor(
     private readonly memory: ConfigMemory,
@@ -64,10 +77,41 @@ export class Scrubber {
       this.progress = 0
 
       const event = this.scanFrame(this.cursor)
-      if (event) events.push(event)
+      if (event) {
+        events.push(event)
+        this.sweepFoundErrors = true
+      }
+      this.sweepScanned++
       this.cursor = (this.cursor + 1) % FRAME_COUNT
+
+      if (this.cursor === 0) {
+        const full = this.endOfSweep()
+        if (full) events.push(full)
+      }
     }
     return events
+  }
+
+  /**
+   * At the end of a complete sweep that ECC thought was clean, verify the
+   * whole image against the CRC in boot flash.
+   */
+  private endOfSweep(): ScrubEvent | null {
+    const complete = this.sweepScanned >= FRAME_COUNT
+    const eccSawNothing = !this.sweepFoundErrors
+    this.sweepScanned = 0
+    this.sweepFoundErrors = false
+    if (!complete || !eccSawNothing) return null
+
+    const live = Array.from({ length: FRAME_COUNT }, (_, f) => this.memory.readFrame(f))
+    if (imageCrc32(live) === this.flash.crc) return null
+
+    for (let f = 0; f < FRAME_COUNT; f++) {
+      const golden = this.flash.readFrame(f)
+      this.memory.writeFrame(f, golden.data, golden.check)
+    }
+    this.pause = FULL_RELOAD_DELAY
+    return { type: 'fullReload' }
   }
 
   /** Check one frame with ECC and repair it if needed. */

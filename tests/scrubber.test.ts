@@ -100,3 +100,30 @@ describe('radiation', () => {
     expect(mem.flippedCount()).toBe(0)
   })
 })
+
+describe('scrubber CRC backstop', () => {
+  it('a triple flip can fool ECC, and the end-of-sweep CRC catches it', () => {
+    const { flash, mem, scrubber } = setup()
+    // Bits 0, 1, 2 sit at codeword positions 3, 5, 6: 3 ^ 5 ^ 6 = 0, so the
+    // syndrome is 0 and ECC blames the overall parity bit. A miscorrection.
+    mem.flipBit(4, 0)
+    mem.flipBit(4, 1)
+    mem.flipBit(4, 2)
+    const first = scrubber.scanFrame(4)
+    expect(first?.type).toBe('corrected')
+    expect(mem.flippedCount()).toBeGreaterThan(0) // ECC made it look clean, but it isn't
+    expect(scrubber.scanFrame(4)).toBeNull()
+
+    scrubber.speed = 64
+    const events = scrubber.tick(1) // two full sweeps
+    expect(events.some((e) => e.type === 'fullReload')).toBe(true)
+    expect(mem.flippedCount()).toBe(0)
+    expect(flash.crc).toBeGreaterThan(0)
+  })
+
+  it('does not full-reload clean memory', () => {
+    const { scrubber } = setup()
+    scrubber.speed = 64
+    expect(scrubber.tick(5)).toEqual([])
+  })
+})

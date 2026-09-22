@@ -87,3 +87,19 @@ describe('sim', () => {
     expect(sim.stateDiverged).toBe(false)
   })
 })
+
+describe('sim recovery after a radiation storm', () => {
+  it('heavy unscrubbed radiation, then scrubbing, ends with clean memory', () => {
+    const sim = new Sim(1337)
+    sim.radiation.rate = 20
+    for (let i = 0; i < 60 * 10; i++) sim.tick(1 / 60)
+    expect(sim.memory.flippedCount()).toBeGreaterThan(100)
+
+    sim.radiation.rate = 0
+    sim.scrubber.enabled = true
+    sim.scrubber.speed = 64
+    // ~20 frame reloads at 0.25 s each, then a CRC-triggered full reload.
+    for (let i = 0; i < 60 * 10; i++) sim.tick(1 / 60)
+    expect(sim.memory.flippedCount()).toBe(0)
+  })
+})
