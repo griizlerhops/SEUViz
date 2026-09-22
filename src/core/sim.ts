@@ -13,7 +13,8 @@ import { BootFlash } from './bootFlash'
 import { Circuit } from './circuit'
 import { ConfigMemory, FRAME_COUNT } from './configMemory'
 import { decode } from './ecc'
-import { buildGoldenImage, type BitPosition } from './layout'
+import { buildGoldenImage, isEssentialBit, type BitPosition } from './layout'
+import { Metrics } from './metrics'
 import { RadiationInjector } from './radiation'
 import { Scrubber, type ScrubEvent } from './scrubber'
 
@@ -38,6 +39,7 @@ export class Sim {
   readonly faulty: Circuit
   /** The reference circuit running from the boot flash image. */
   readonly golden: Circuit
+  readonly metrics = new Metrics()
 
   /** Multiplier on real time (1x, 4x, 16x). */
   timeScale = 1
@@ -71,8 +73,17 @@ export class Sim {
 
   private step(dt: number, events: TickEvents): void {
     this.time += dt
-    events.flips.push(...this.radiation.tick(dt))
-    events.scrub.push(...this.scrubber.tick(dt))
+    const flips = this.radiation.tick(dt)
+    this.recordFlips(flips)
+    events.flips.push(...flips)
+
+    const scrub = this.scrubber.tick(dt)
+    for (const e of scrub) {
+      if (e.type === 'corrected') this.metrics.recordCorrection()
+      else if (e.type === 'reloaded') this.metrics.recordFrameReload()
+      else this.metrics.recordFullReload()
+    }
+    events.scrub.push(...scrub)
 
     this.clockPhase += dt
     const period = 1 / CLOCK_HZ
@@ -88,16 +99,25 @@ export class Sim {
     this.faulty.clock()
     this.golden.clock()
     if (this.autoResync && this.stateDiverged && this.memoryPassesEcc()) this.resync()
+    this.metrics.recordTick({ time: this.time, match: this.outputsMatch, scrubbing: this.scrubber.enabled })
+  }
+
+  private recordFlips(flips: BitPosition[]): void {
+    for (const f of flips) this.metrics.recordFlip(isEssentialBit(f.frame, f.bit))
   }
 
   // ---- User actions ----
 
   flipAt(frame: number, bit: number): BitPosition {
-    return this.radiation.flipAt(frame, bit)
+    const hit = this.radiation.flipAt(frame, bit)
+    this.recordFlips([hit])
+    return hit
   }
 
   burst(): BitPosition[] {
-    return this.radiation.burst()
+    const hits = this.radiation.burst()
+    this.recordFlips(hits)
+    return hits
   }
 
   /** Copy the golden state into the faulty circuit (a design reset / resync). */

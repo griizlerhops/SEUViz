@@ -103,3 +103,48 @@ describe('sim recovery after a radiation storm', () => {
     expect(sim.memory.flippedCount()).toBe(0)
   })
 })
+
+describe('metrics', () => {
+  it('counts flips, essential flips, corrections and reloads', () => {
+    const sim = new Sim(5)
+    const { frame, bit } = lutBitPosition(4, 0) // essential
+    sim.flipAt(frame, bit)
+    sim.flipAt(0, 0) // unused
+    sim.flipAt(1, 1)
+    sim.flipAt(1, 2) // frame 1 now has a double error
+    expect(sim.metrics.flipsInjected).toBe(4)
+    expect(sim.metrics.essentialFlips).toBe(1)
+
+    sim.scrubber.enabled = true
+    sim.scrubber.speed = 64
+    sim.tick(1)
+    expect(sim.metrics.errorsCorrected).toBe(2)
+    expect(sim.metrics.framesReloaded).toBe(1)
+    expect(sim.memory.flippedCount()).toBe(0)
+  })
+
+  it('tracks correctness separately with the scrubber on and off', () => {
+    const sim = new Sim(5)
+    sim.tick(2)
+    expect(sim.metrics.correctness()).toBe(100)
+    expect(sim.metrics.correctnessWhile(false)).toBe(100)
+    expect(sim.metrics.correctnessWhile(true)).toBeNull()
+
+    // Corrupt LED0's LUT for every state: output is wrong on 14 of 16 states.
+    for (let e = 0; e < 16; e++) {
+      const { frame, bit } = lutBitPosition(4, e)
+      sim.flipAt(frame, bit)
+    }
+    sim.tick(4) // 16 ticks
+    expect(sim.metrics.correctnessWhile(false)!).toBeLessThan(100)
+  })
+
+  it('keeps only the last 60 simulated seconds of timeline', () => {
+    const sim = new Sim(5)
+    sim.timeScale = 16
+    for (let i = 0; i < 60 * 10; i++) sim.tick(1 / 60) // 160 s simulated
+    const tl = sim.metrics.timeline()
+    expect(tl[tl.length - 1].time - tl[0].time).toBeLessThanOrEqual(60)
+    expect(tl.length).toBeGreaterThan(200)
+  })
+})

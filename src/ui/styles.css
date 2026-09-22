@@ -433,3 +433,28 @@ button.btn.primary {
   color: var(--muted);
   font-size: 0.78rem;
 }
+
+.chart-wrap {
+  position: relative;
+}
+.chart-tip {
+  display: none;
+  position: absolute;
+  top: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.full-width {
+  grid-column: 1 / -1;
+}
+.chart-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

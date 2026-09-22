@@ -6,6 +6,8 @@ import { Sim } from '../core/sim'
 import { CircuitView } from './circuitView'
 import { Controls } from './controls'
 import { GridView } from './grid'
+import { TimelineChart } from './chart'
+import { MetricsView } from './metricsView'
 
 const DEFAULT_SEED = 1337
 /** Cap on real seconds per frame, so a backgrounded tab doesn't jump ahead. */
@@ -31,6 +33,8 @@ try {
 // ---------- Views ----------
 const circuitView = new CircuitView(getSim)
 const grid = new GridView(getSim, (frame, bit) => sim.flipAt(frame, bit))
+const metricsView = new MetricsView(getSim)
+const chart = new TimelineChart(getSim)
 const controls = new Controls({
   getSim,
   burst: () => sim.burst(),
@@ -104,13 +108,14 @@ themeButton.addEventListener('click', () => {
   } catch {
     // Ignore: theme just won't be remembered.
   }
+})
+// Re-read canvas colors whenever the theme changes, however it changed.
+const onThemeChange = () => {
   syncThemeButton()
   grid.refreshPalette()
-})
-window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-  syncThemeButton()
-  grid.refreshPalette()
-})
+}
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', onThemeChange)
+new MutationObserver(onThemeChange).observe(document.documentElement, { attributeFilter: ['data-theme'] })
 syncThemeButton()
 
 const header = document.createElement('header')
@@ -131,7 +136,9 @@ mainCol.append(
   panel('Configuration memory · 32 frames × (32 data + 7 ECC) bits', grid.element, legend()),
 )
 sideCol.append(panel('Controls', controls.element), panel('What am I looking at?', explainer()))
-layout.append(mainCol, sideCol)
+const metricsPanel = panel('Metrics · last 60 simulated seconds', metricsView.element, chart.element)
+metricsPanel.classList.add('full-width')
+layout.append(mainCol, sideCol, metricsPanel)
 
 const app = document.getElementById('app')!
 app.replaceChildren(header, layout)
@@ -145,6 +152,8 @@ function frame(now: number) {
   grid.addEvents(events, now)
   grid.render(now)
   circuitView.render()
+  metricsView.render()
+  chart.render()
   requestAnimationFrame(frame)
 }
 requestAnimationFrame(frame)
